@@ -23,20 +23,20 @@ def view(session):
     r = session.post('http://' + URL + '/cgi-bin/luci/admin/settings/gwinfo', params=payload)
     return json.loads(r.text)
 
-    
+
 #  查看状态
 def gwstatus(session):
     payload = {'get': 'part', '_': random.random()}
     r = session.post('http://' + URL + '/cgi-bin/luci/admin/settings/gwstatus', params=payload)
     return json.loads(r.text)
-    
-	
+
+
 # 查看端口映射
 def portmap_list(session):
     payload = {'get': 'part', '_': random.random()}
     r = session.post('http://' + URL + '/cgi-bin/luci/admin/settings/pmDisplay', params=payload)
     return json.loads(r.text)
-    
+
 
 # 登出
 def logout(session, token):
@@ -52,15 +52,19 @@ def reboot(session, token):
     print(r.text)
 
 
+def pretty_print(obj):
+    print(json.dumps(obj, indent=2, sort_keys=True))
+
+
 # example
 s = login(UNAME, UPWD)
 r = view(s['session'])
 status = gwstatus(s['session'])
 pmlist = portmap_list(s['session'])
 
-print(r)
+pretty_print(r)
 print(r['WANIP'])
-print(status)
-print(pmlist)
+pretty_print(status)
+pretty_print(pmlist)
 logout(s['session'], s['token'])
 # reboot(s['session'], s['token'])
