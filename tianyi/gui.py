@@ -90,12 +90,19 @@ class TianyiManagerGUI(tk.Tk):
     def load_config(self):
         """读取 app_config.json 配置，若不存在则使用默认值"""
         default_config = {
-            "url": tianyi.URL,
-            "username": tianyi.UNAME,
-            "password": tianyi.UPWD,
-            "proxy": tianyi.PROXY or "",
+            "url": "192.168.1.1",
+            "username": "useradmin",
+            "password": "",
+            "proxy": "",
             "auto_refresh": False
         }
+        # 兼容 tianyi.load_config()
+        if hasattr(tianyi, 'load_config'):
+            try:
+                default_config.update(tianyi.load_config())
+            except Exception:
+                pass
+
         if os.path.exists(self.config_file):
             try:
                 with open(self.config_file, "r", encoding="utf-8") as f:
@@ -136,22 +143,22 @@ class TianyiManagerGUI(tk.Tk):
 
         ttk.Label(top_frame, text="地址:").grid(row=0, column=0, padx=3, sticky=tk.W)
         self.ent_url = ttk.Entry(top_frame, width=12)
-        self.ent_url.insert(0, self.config_data.get("url", tianyi.URL))
+        self.ent_url.insert(0, self.config_data.get("url", getattr(tianyi, 'URL', '192.168.1.1')))
         self.ent_url.grid(row=0, column=1, padx=3)
 
         ttk.Label(top_frame, text="账号:").grid(row=0, column=2, padx=3, sticky=tk.W)
         self.ent_user = ttk.Entry(top_frame, width=11)
-        self.ent_user.insert(0, self.config_data.get("username", tianyi.UNAME))
+        self.ent_user.insert(0, self.config_data.get("username", "useradmin"))
         self.ent_user.grid(row=0, column=3, padx=3)
 
         ttk.Label(top_frame, text="密码:").grid(row=0, column=4, padx=3, sticky=tk.W)
         self.ent_pwd = ttk.Entry(top_frame, width=9, show="*")
-        self.ent_pwd.insert(0, self.config_data.get("password", tianyi.UPWD))
+        self.ent_pwd.insert(0, self.config_data.get("password", ""))
         self.ent_pwd.grid(row=0, column=5, padx=3)
 
         ttk.Label(top_frame, text="代理:").grid(row=0, column=6, padx=3, sticky=tk.W)
         self.ent_proxy = ttk.Entry(top_frame, width=22)
-        self.ent_proxy.insert(0, self.config_data.get("proxy", tianyi.PROXY or ""))
+        self.ent_proxy.insert(0, self.config_data.get("proxy", ""))
         self.ent_proxy.grid(row=0, column=7, padx=2)
 
         # 小眼睛按钮 (切换代理可见性)
@@ -171,7 +178,7 @@ class TianyiManagerGUI(tk.Tk):
         timer_box.grid(row=0, column=11, padx=(10, 4), sticky=tk.E)
 
         # 敏感信息打码切换按钮 (截图模式)
-        self.btn_privacy = ttk.Button(timer_box, text="🙈 隐私打码 (截图)", command=self.toggle_privacy_mode)
+        self.btn_privacy = ttk.Button(timer_box, text="🙈 隐私打码", command=self.toggle_privacy_mode)
         self.btn_privacy.pack(side=tk.LEFT, padx=4)
 
         self.var_timer = tk.BooleanVar(value=self.config_data.get("auto_refresh", False))
