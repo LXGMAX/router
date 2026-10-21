@@ -2,24 +2,54 @@ import random
 import requests
 import re
 import json
+import os
 
-URL = '192.168.1.1'
-UNAME = 'useradmin'
-UPWD  = 'zeqrg'
+CONFIG_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'app_config.json')
 
-# 代理配置（若不需要代理，设置为 None）
-PROXY = 'http://higzj.vicp.io:53128'
+def load_config():
+    """从 app_config.json 动态加载配置；若文件不存在则返回默认空配置"""
+    default_config = {
+        'url': '192.168.1.1',
+        'username': '',
+        'password': '',
+        'proxy': None,
+        'auto_refresh': False
+    }
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                default_config.update(data)
+        except Exception as e:
+            print(f"读取 {CONFIG_FILE} 失败: {e}")
+    return default_config
+
+# 全局默认网关地址（优先从 json 加载）
+_cfg = load_config()
+URL = _cfg.get('url', '192.168.1.1')
 
 
 # ------------------------- 基础认证与系统管理 -------------------------
 
-def login(username=UNAME, password=UPWD, proxy=PROXY):
-    """登录天翼网关，返回 session 与 token"""
-    payload = {'username': username, 'psd': password}
+def login(username=None, password=None, proxy=None, url=None):
+    """
+    登录天翼网关，返回 session 与 token。
+    若未传参，则自动从 app_config.json 中读取配置。
+    """
+    global URL
+    cfg = load_config()
+    target_url = url or cfg.get('url', URL)
+    user = username if username is not None else cfg.get('username', '')
+    pwd = password if password is not None else cfg.get('password', '')
+    p_proxy = proxy if proxy is not None else cfg.get('proxy') or None
+
+    URL = target_url  # 保持全局 URL 与当前连接一致
+
+    payload = {'username': user, 'psd': pwd}
     s = requests.Session()
-    if proxy:
-        s.proxies = {'http': proxy, 'https': proxy}
-    r = s.post('http://' + URL + '/cgi-bin/luci', params=payload, timeout=10)
+    if p_proxy:
+        s.proxies = {'http': p_proxy, 'https': p_proxy}
+    r = s.post('http://' + target_url + '/cgi-bin/luci', params=payload, timeout=10)
     tokens = re.compile(r"token: '([a-z0-9]{32})'").findall(r.text)
     if not tokens:
         raise RuntimeError("登录失败，未匹配到 token！请检查账号密码或网络连接。")
@@ -307,7 +337,7 @@ def pretty_print(title, obj):
 # ------------------------- 演示 -------------------------
 
 if __name__ == '__main__':
-    conn = login(UNAME, UPWD)
+    conn = login()  # 自动读取 app_config.json
     session = conn['session']
     token = conn['token']
 
