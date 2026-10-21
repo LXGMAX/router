@@ -64,6 +64,16 @@ class TianyiManagerGUI(tk.Tk):
         self.session = None
         self.token = None
         self.proxy_visible = True
+        self.privacy_mode = False  # 敏感信息脱敏模式（用于截图分享）
+
+        # 缓存最新拉取到的原始数据，便于脱敏切换时无需重新发网络请求
+        self.raw_gwinfo = None
+        self.raw_status = None
+        self.raw_allinfo = None
+        self.raw_lan = None
+        self.raw_wifi = None
+        self.raw_adv = None
+        self.raw_devices = None
 
         # 配置文件路径
         self.config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_config.json")
@@ -156,14 +166,18 @@ class TianyiManagerGUI(tk.Tk):
         self.lbl_status = ttk.Label(top_frame, text="● 未连接", foreground="#94A3B8")
         self.lbl_status.grid(row=0, column=10, padx=6)
 
-        # 顶部操作栏右侧：定时刷新开关
+        # 顶部操作栏右侧：隐私脱敏按钮与定时刷新开关
         timer_box = ttk.Frame(top_frame)
-        timer_box.grid(row=0, column=11, padx=(16, 4), sticky=tk.E)
+        timer_box.grid(row=0, column=11, padx=(10, 4), sticky=tk.E)
+
+        # 敏感信息打码切换按钮 (截图模式)
+        self.btn_privacy = ttk.Button(timer_box, text="🙈 隐私打码 (截图)", command=self.toggle_privacy_mode)
+        self.btn_privacy.pack(side=tk.LEFT, padx=4)
 
         self.var_timer = tk.BooleanVar(value=self.config_data.get("auto_refresh", False))
         self.chk_timer = ttk.Checkbutton(timer_box, text="⚡ 1秒自动刷新",
                                          variable=self.var_timer, command=self.on_timer_toggle)
-        self.chk_timer.pack(side=tk.LEFT)
+        self.chk_timer.pack(side=tk.LEFT, padx=4)
 
         # 底部状态栏（先 pack 底部，确保始终可见）
         bottom_bar = ttk.Frame(self, padding=(12, 6))
@@ -413,6 +427,54 @@ class TianyiManagerGUI(tk.Tk):
 
     # ------------------ 辅助与工具函数 ------------------
 
+    def mask_text(self, val, typ="general"):
+        """敏感信息脱敏处理器"""
+        if not val or not self.privacy_mode:
+            return str(val or "")
+        val = str(val).strip()
+        if typ == "ip":
+            # 公网 IP 或敏感 IP：保留首位，其余打码 如 171.***.***.***
+            parts = val.split(".")
+            if len(parts) == 4:
+                return f"{parts[0]}.*.*.*"
+            return "***.***.***.***"
+        elif typ == "mac":
+            # MAC 地址打码：例如 10:12:B4:*:*:* 或 1012B4******
+            if len(val) >= 6:
+                return val[:6] + "*" * (len(val) - 6)
+            return "******"
+        elif typ == "sn":
+            # 序列号打码：保留前后两位
+            if len(val) > 4:
+                return val[:3] + "****" + val[-2:]
+            return "******"
+        elif typ == "pwd":
+            # 密码全打码
+            return "******"
+        return "******"
+
+    def toggle_privacy_mode(self):
+        """一键切换敏感信息脱敏模式（用于截图展示）"""
+        self.privacy_mode = not self.privacy_mode
+        if self.privacy_mode:
+            self.btn_privacy.config(text="🐵 恢复明文")
+            self.set_status("已开启隐私模式：MAC、公网IP、SN、WiFi密码已脱敏")
+        else:
+            self.btn_privacy.config(text="🙈 隐私打码 (截图)")
+            self.set_status("已关闭隐私模式：恢复正常明文显示")
+
+        # 立即重新渲染已有数据，不需要重新发请求
+        self.render_all_views()
+
+    def render_all_views(self):
+        """使用当前脱敏模式重新刷新界面各面板"""
+        if self.raw_gwinfo and self.raw_status and self.raw_allinfo and self.raw_lan:
+            self.render_overview_ui(self.raw_gwinfo, self.raw_status, self.raw_allinfo, self.raw_lan)
+        if self.raw_devices is not None:
+            self.render_devices_ui(self.raw_devices, self.raw_allinfo or {})
+        if self.raw_wifi:
+            self.render_wifi_ui(self.raw_wifi, self.raw_adv or {})
+
     def toggle_proxy_visibility(self):
         """切换代理输入框的可见性（明文/密文）"""
         if self.proxy_visible:
@@ -588,31 +650,42 @@ class TianyiManagerGUI(tk.Tk):
             return
         self.set_status("正在获取网关概览信息...")
         try:
-            gwinfo = tianyi.view(self.session)
-            status = tianyi.gwstatus(self.session)
-            allinfo = tianyi.all_info(self.session)
-            lan = tianyi.lan_info(self.session)
+            self.raw_gwinfo = tianyi.view(self.session)
+            self.raw_status = tianyi.gwstatus(self.session)
+            self.raw_allinfo = tianyi.all_info(self.session)
+            self.raw_lan = tianyi.lan_info(self.session)
 
-            cpu = status.get('cpuUsed', 0)
-            tw_up = allinfo.get('tWUp', 0)
-            tw_down = allinfo.get('tWDown', 0)
-            wan_conn = allinfo.get('wanConnect', 'UNKNOWN')
-            wcount = status.get('wcount', 0)
-            wlcount = status.get('wlcount', 0)
-            itv = status.get('itv', False)
-            voip = status.get('voip', False)
+            self.render_overview_ui(self.raw_gwinfo, self.raw_status, self.raw_allinfo, self.raw_lan)
+            self.set_status("概览信息更新完成")
+        except Exception as e:
+            self.set_status(f"获取概览失败: {e}")
 
-            # 更新图形组件
-            self.after(0, lambda: self.update_dashboard_ui(
-                cpu, tw_up, tw_down, wan_conn, wcount, wlcount, itv, voip
-            ))
+    def render_overview_ui(self, gwinfo, status, allinfo, lan):
+        cpu = status.get('cpuUsed', 0)
+        tw_up = allinfo.get('tWUp', 0)
+        tw_down = allinfo.get('tWDown', 0)
+        wan_conn = allinfo.get('wanConnect', 'UNKNOWN')
+        wcount = status.get('wcount', 0)
+        wlcount = status.get('wlcount', 0)
+        itv = status.get('itv', False)
+        voip = status.get('voip', False)
 
-            # 更新文本详情
-            text = f"""【硬件与网络基本信息】
-  产品型号: {gwinfo.get('ProductCls')} (序列号: {gwinfo.get('ProductSN')})
+        # 敏感信息脱敏
+        disp_sn = self.mask_text(gwinfo.get('ProductSN'), "sn")
+        disp_mac = self.mask_text(gwinfo.get('MAC'), "mac")
+        disp_wan_ip = self.mask_text(gwinfo.get('WANIP'), "ip")
+
+        # 更新图形组件
+        self.after(0, lambda: self.update_dashboard_ui(
+            cpu, tw_up, tw_down, wan_conn, wcount, wlcount, itv, voip
+        ))
+
+        # 更新文本详情
+        text = f"""【硬件与网络基本信息】
+  产品型号: {gwinfo.get('ProductCls')} (序列号: {disp_sn})
   软件固件版本: {gwinfo.get('SWVer')}
-  网关 MAC 地址: {gwinfo.get('MAC')}
-  公网 WAN IP: {gwinfo.get('WANIP')}
+  网关 MAC 地址: {disp_mac}
+  公网 WAN IP: {disp_wan_ip}
   局域网 LAN IP: {gwinfo.get('LANIP')} (子网掩码: {lan.get('subnetMask')})
   DHCP 地址池: {lan.get('poolStart')} ~ {lan.get('poolEnd')} (开关状态: {lan.get('dhcpEnbl')})
 
@@ -622,10 +695,7 @@ class TianyiManagerGUI(tk.Tk):
   WAN 链路状态: {wan_conn}
   CPU 瞬时占用: {cpu}%
 """
-            self.after(0, lambda: self._set_text(self.txt_overview, text))
-            self.set_status("概览信息更新完成")
-        except Exception as e:
-            self.set_status(f"获取概览失败: {e}")
+        self.after(0, lambda: self._set_text(self.txt_overview, text))
 
     def _set_text(self, widget, text):
         widget.delete("1.0", tk.END)
@@ -636,42 +706,46 @@ class TianyiManagerGUI(tk.Tk):
             return
         self.set_status("正在查询在线设备...")
         try:
-            devs_wired = tianyi.dev_info(self.session, dev_type='0')
-            all_info_data = tianyi.all_info(self.session)
+            self.raw_devices = tianyi.dev_info(self.session, dev_type='0')
+            self.raw_allinfo = tianyi.all_info(self.session)
 
-            # 建立 IP -> 品牌/型号 映射字典
-            brand_map = {}
-            for k, v in all_info_data.items():
-                if k.startswith("pc") and isinstance(v, dict):
-                    ip = v.get("ip")
-                    model_str = f"{v.get('brand', '')} {v.get('model', '')}".strip()
-                    if ip:
-                        brand_map[ip] = model_str
-
-            rows = []
-            for k, dev in devs_wired.items():
-                if k.startswith("dev"):
-                    ip = dev.get("ip", "")
-                    sys_model = brand_map.get(ip) or dev.get("system", "") or dev.get("type", "")
-                    rows.append((
-                        ip,
-                        dev.get("mac"),
-                        dev.get("type"),
-                        self.format_speed(dev.get("upSpeed")),
-                        self.format_speed(dev.get("downSpeed")),
-                        "已拉黑" if dev.get("black") else "正常",
-                        sys_model
-                    ))
-
-            def _update():
-                self.tree_dev.delete(*self.tree_dev.get_children())
-                for r in rows:
-                    self.tree_dev.insert("", tk.END, values=r)
-
-            self.after(0, _update)
+            self.render_devices_ui(self.raw_devices, self.raw_allinfo)
             self.set_status("在线设备列表已更新")
         except Exception as e:
             self.set_status(f"获取设备失败: {e}")
+
+    def render_devices_ui(self, devs_wired, all_info_data):
+        # 建立 IP -> 品牌/型号 映射字典
+        brand_map = {}
+        for k, v in (all_info_data or {}).items():
+            if k.startswith("pc") and isinstance(v, dict):
+                ip = v.get("ip")
+                model_str = f"{v.get('brand', '')} {v.get('model', '')}".strip()
+                if ip:
+                    brand_map[ip] = model_str
+
+        rows = []
+        for k, dev in devs_wired.items():
+            if k.startswith("dev"):
+                ip = dev.get("ip", "")
+                mac = self.mask_text(dev.get("mac"), "mac")
+                sys_model = brand_map.get(ip) or dev.get("system", "") or dev.get("type", "")
+                rows.append((
+                    ip,
+                    mac,
+                    dev.get("type"),
+                    self.format_speed(dev.get("upSpeed")),
+                    self.format_speed(dev.get("downSpeed")),
+                    "已拉黑" if dev.get("black") else "正常",
+                    sys_model
+                ))
+
+        def _update():
+            self.tree_dev.delete(*self.tree_dev.get_children())
+            for r in rows:
+                self.tree_dev.insert("", tk.END, values=r)
+
+        self.after(0, _update)
 
     def refresh_portmap(self):
         if not self.check_logged_in():
@@ -707,31 +781,40 @@ class TianyiManagerGUI(tk.Tk):
             return
         self.set_status("正在获取 Wi-Fi 配置...")
         try:
-            wifi = tianyi.wifi_base_settings(self.session)
-            adv = tianyi.wifi_adv_settings(self.session)
+            self.raw_wifi = tianyi.wifi_base_settings(self.session)
+            self.raw_adv = tianyi.wifi_adv_settings(self.session)
 
-            def _update():
-                self.wifi_2g_ssid.delete(0, tk.END)
-                self.wifi_2g_ssid.insert(0, wifi.get("ssid1", ""))
-                self.wifi_2g_pwd.delete(0, tk.END)
-                self.wifi_2g_pwd.insert(0, wifi.get("passwd1", ""))
+            self.render_wifi_ui(self.raw_wifi, self.raw_adv)
+            self.set_status("Wi-Fi 配置已更新")
+        except Exception as e:
+            self.set_status(f"获取 Wi-Fi 失败: {e}")
 
-                self.wifi_5g_ssid.delete(0, tk.END)
-                self.wifi_5g_ssid.insert(0, wifi.get("ssid2", ""))
-                self.wifi_5g_pwd.delete(0, tk.END)
-                self.wifi_5g_pwd.insert(0, wifi.get("passwd2", ""))
+    def render_wifi_ui(self, wifi, adv):
+        pwd1 = self.mask_text(wifi.get("passwd1", ""), "pwd")
+        pwd2 = self.mask_text(wifi.get("passwd2", ""), "pwd")
 
-                text = f"""【2.4G 无线网络】
+        def _update():
+            self.wifi_2g_ssid.delete(0, tk.END)
+            self.wifi_2g_ssid.insert(0, wifi.get("ssid1", ""))
+            self.wifi_2g_pwd.delete(0, tk.END)
+            self.wifi_2g_pwd.insert(0, pwd1)
+
+            self.wifi_5g_ssid.delete(0, tk.END)
+            self.wifi_5g_ssid.insert(0, wifi.get("ssid2", ""))
+            self.wifi_5g_pwd.delete(0, tk.END)
+            self.wifi_5g_pwd.insert(0, pwd2)
+
+            text = f"""【2.4G 无线网络】
   开关状态: {'开启' if wifi.get('enbl1') else '关闭'}
   SSID 名称: {wifi.get('ssid1')}
-  Wi-Fi 密码: {wifi.get('passwd1')}
+  Wi-Fi 密码: {pwd1}
   认证加密: {wifi.get('auth1')}
   发射功率级别: {wifi.get('powerLevel1')} (穿墙模式: {'已开启' if wifi.get('wallPower1') else '未开启'})
 
 【5G 无线网络】
   开关状态: {'开启' if wifi.get('enbl2') else '关闭'}
   SSID 名称: {wifi.get('ssid2')}
-  Wi-Fi 密码: {wifi.get('passwd2')}
+  Wi-Fi 密码: {pwd2}
   认证加密: {wifi.get('auth2')}
   无线协议: 802.11{wifi.get('standard2')}
   发射功率级别: {wifi.get('powerLevel2')} (穿墙模式: {'已开启' if wifi.get('wallPower2') else '未开启'})
@@ -740,12 +823,9 @@ class TianyiManagerGUI(tk.Tk):
   定时开关: {'已启用' if adv.get('timerEnbl') == 1 else '未启用'}
   生效时间段: {adv.get('startTime')} ~ {adv.get('endTime')}
 """
-                self._set_text(self.txt_wifi, text)
+            self._set_text(self.txt_wifi, text)
 
-            self.after(0, _update)
-            self.set_status("Wi-Fi 配置已更新")
-        except Exception as e:
-            self.set_status(f"获取 Wi-Fi 失败: {e}")
+        self.after(0, _update)
 
     # ------------------ 设置调用事件 ------------------
 
