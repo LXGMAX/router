@@ -5,6 +5,7 @@ import sys
 import os
 import math
 import time
+import json
 
 # 将上级/当前目录加入引用路径以直接使用 tianyi.py 中的接口
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -64,6 +65,10 @@ class TianyiManagerGUI(tk.Tk):
         self.token = None
         self.proxy_visible = True
 
+        # 配置文件路径
+        self.config_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "app_config.json")
+        self.config_data = self.load_config()
+
         # 定时器相关
         self.timer_running = False
         self.timer_thread = None
@@ -71,6 +76,39 @@ class TianyiManagerGUI(tk.Tk):
 
         self.setup_styles()
         self.setup_ui()
+
+    def load_config(self):
+        """读取 app_config.json 配置，若不存在则使用默认值"""
+        default_config = {
+            "url": tianyi.URL,
+            "username": tianyi.UNAME,
+            "password": tianyi.UPWD,
+            "proxy": tianyi.PROXY or "",
+            "auto_refresh": False
+        }
+        if os.path.exists(self.config_file):
+            try:
+                with open(self.config_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    default_config.update(data)
+            except Exception as e:
+                print(f"读取配置失败: {e}")
+        return default_config
+
+    def save_config(self):
+        """将当前输入项及自动刷新设置写入 app_config.json"""
+        config = {
+            "url": self.ent_url.get().strip(),
+            "username": self.ent_user.get().strip(),
+            "password": self.ent_pwd.get().strip(),
+            "proxy": self.ent_proxy.get().strip(),
+            "auto_refresh": self.var_timer.get()
+        }
+        try:
+            with open(self.config_file, "w", encoding="utf-8") as f:
+                json.dump(config, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"保存配置失败: {e}")
 
     def setup_styles(self):
         style = ttk.Style(self)
@@ -88,22 +126,22 @@ class TianyiManagerGUI(tk.Tk):
 
         ttk.Label(top_frame, text="地址:").grid(row=0, column=0, padx=3, sticky=tk.W)
         self.ent_url = ttk.Entry(top_frame, width=12)
-        self.ent_url.insert(0, tianyi.URL)
+        self.ent_url.insert(0, self.config_data.get("url", tianyi.URL))
         self.ent_url.grid(row=0, column=1, padx=3)
 
         ttk.Label(top_frame, text="账号:").grid(row=0, column=2, padx=3, sticky=tk.W)
         self.ent_user = ttk.Entry(top_frame, width=11)
-        self.ent_user.insert(0, tianyi.UNAME)
+        self.ent_user.insert(0, self.config_data.get("username", tianyi.UNAME))
         self.ent_user.grid(row=0, column=3, padx=3)
 
         ttk.Label(top_frame, text="密码:").grid(row=0, column=4, padx=3, sticky=tk.W)
         self.ent_pwd = ttk.Entry(top_frame, width=9, show="*")
-        self.ent_pwd.insert(0, tianyi.UPWD)
+        self.ent_pwd.insert(0, self.config_data.get("password", tianyi.UPWD))
         self.ent_pwd.grid(row=0, column=5, padx=3)
 
         ttk.Label(top_frame, text="代理:").grid(row=0, column=6, padx=3, sticky=tk.W)
         self.ent_proxy = ttk.Entry(top_frame, width=22)
-        self.ent_proxy.insert(0, tianyi.PROXY or "")
+        self.ent_proxy.insert(0, self.config_data.get("proxy", tianyi.PROXY or ""))
         self.ent_proxy.grid(row=0, column=7, padx=2)
 
         # 小眼睛按钮 (切换代理可见性)
@@ -122,7 +160,7 @@ class TianyiManagerGUI(tk.Tk):
         timer_box = ttk.Frame(top_frame)
         timer_box.grid(row=0, column=11, padx=(16, 4), sticky=tk.E)
 
-        self.var_timer = tk.BooleanVar(value=False)
+        self.var_timer = tk.BooleanVar(value=self.config_data.get("auto_refresh", False))
         self.chk_timer = ttk.Checkbutton(timer_box, text="⚡ 1秒自动刷新",
                                          variable=self.var_timer, command=self.on_timer_toggle)
         self.chk_timer.pack(side=tk.LEFT)
@@ -426,6 +464,9 @@ class TianyiManagerGUI(tk.Tk):
             self.session = res['session']
             self.token = res['token']
 
+            # 登录成功后保存当前配置（记忆功能）
+            self.save_config()
+
             # 更新登录按钮状态为【断开网关】
             self.btn_conn.config(text="断开网关")
             self.lbl_status.config(text="● 已连接", foreground="#10B981")
@@ -436,6 +477,13 @@ class TianyiManagerGUI(tk.Tk):
             self.refresh_devices()
             self.refresh_portmap()
             self.refresh_wifi()
+
+            # 若配置中开启了自动刷新，登录后自动启动定时器
+            if self.var_timer.get() and not self.timer_running:
+                self.timer_running = True
+                self.timer_thread = threading.Thread(target=self.timer_worker, daemon=True)
+                self.timer_thread.start()
+                self.set_status("登录成功，已自动开启 1 秒定时监控")
         except Exception as e:
             self.lbl_status.config(text="● 连接失败", foreground="#EF4444")
             self.set_status(f"连接失败: {e}")
@@ -468,6 +516,8 @@ class TianyiManagerGUI(tk.Tk):
     # ------------------ 定时器控制 (1秒获取数据) ------------------
 
     def on_timer_toggle(self):
+        # 记忆自动刷新状态
+        self.save_config()
         if self.var_timer.get():
             if not self.session:
                 messagebox.showwarning("提示", "请先登录连接网关后再开启定时器！")
